@@ -6427,6 +6427,7 @@ class CodeEditContextBody(TypedDict, total=False):
 
 class CodeSymbolOutput(TypedDict, total=False):
     definitions: Required[list["CodeUnit"]]
+    forwarded_definition: NotRequired[Optional["GrepDependency"]]
     lessons_left_out: NotRequired[int]
     ambiguous: NotRequired[bool]
     hierarchy: NotRequired[dict[str, list[dict[str, Any]]]]
@@ -6478,6 +6479,14 @@ class CodeUnit(TypedDict, total=False):
     lexical_rank: NotRequired[int]
     vector_rank: NotRequired[int]
     namespace: NotRequired[str]
+
+
+class GrepDependency(TypedDict, total=False):
+    qualified_name: Required[str]
+    path: Required[str]
+    start_line: Required[int]
+    end_line: Required[int]
+    body: Required[str]
 
 
 class CodeEnclosingInput(TypedDict, total=False):
@@ -6761,14 +6770,6 @@ class RelatedGrepEvidence(TypedDict, total=False):
     definitions_note: NotRequired[str]
     truncated: NotRequired[bool]
     dependencies: NotRequired[list["GrepDependency"]]
-
-
-class GrepDependency(TypedDict, total=False):
-    qualified_name: Required[str]
-    path: Required[str]
-    start_line: Required[int]
-    end_line: Required[int]
-    body: Required[str]
 
 
 class CodeHistoryInput(TypedDict, total=False):

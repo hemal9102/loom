@@ -596,6 +596,7 @@ Read implementation, indexed tests, and linked notes before editing.
 | Output field | Type | Meaning |
 | --- | --- | --- |
 | `definitions` | `list[CodeUnit]` | Up to 10 name matches, or the members matched by file clues, fitted to `token_budget`. |
+| `forwarded_definition` | `GrepDependency \| None` | code.edit_context may also serve the implementation reached through a single, verified forwarding call in the requested definition. |
 | `lessons_left_out` | `int` | Whole linked lessons omitted to preserve definitions within an explicit request budget. |
 | `ambiguous` | `bool` | True when the served definitions carry more than one distinct name/signature pair. |
 | `hierarchy` | `dict[str, list[dict[str, Any]]]` | For a class / interface / enum definition, its type hierarchy from the `inherits` edges of both tiers, folded by qualified name: {"supertypes": [...], "subtypes": [...]} of {symbol, kind, via (extends \| implements), tier, confidence, path… |
@@ -1658,6 +1659,7 @@ Find an exact definition by name or path:line.
 | Output field | Type | Meaning |
 | --- | --- | --- |
 | `definitions` | `list[CodeUnit]` | Up to 10 name matches, or the members matched by file clues, fitted to `token_budget`. |
+| `forwarded_definition` | `GrepDependency \| None` | code.edit_context may also serve the implementation reached through a single, verified forwarding call in the requested definition. |
 | `lessons_left_out` | `int` | Whole linked lessons omitted to preserve definitions within an explicit request budget. |
 | `ambiguous` | `bool` | True when the served definitions carry more than one distinct name/signature pair. |
 | `hierarchy` | `dict[str, list[dict[str, Any]]]` | For a class / interface / enum definition, its type hierarchy from the `inherits` edges of both tiers, folded by qualified name: {"supertypes": [...], "subtypes": [...]} of {symbol, kind, via (extends \| implements), tier, confidence, path… |

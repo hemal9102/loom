@@ -10,6 +10,7 @@ import re
 import textwrap
 import tokenize
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from server.code.api.models_grep import CodeGrepInput, GrepDependency, RelatedGrepEvidence
@@ -18,6 +19,7 @@ from server.code.app.spans import code_span
 from server.code.app.symbol.resolve import _indexed_commit, symbol_body
 from server.code.domain.deadline import Budget
 from server.code.domain.search_scope import SearchScope
+from server.code.domain.units import CodeUnit
 from server.code.store.index import CodeRepo
 from server.core.caller_regex import compile_caller_regex
 
@@ -96,11 +98,10 @@ async def forwarded_dependency(
                     repo,
                     org,
                     ns,
-                    input,
-                    scope,
                     definitions,
                     names,
                     match_revisions(matches, commits),
+                    allows_path=lambda path: _allowed(path, input, scope),
                 )
     except TimeoutError:
         if budget is not None:
@@ -112,20 +113,56 @@ async def forwarded_dependency(
     return found, ""
 
 
+async def edit_forwarded_definition(
+    repo: CodeRepo,
+    org: str,
+    ns: str,
+    row: dict[str, Any],
+    unit: CodeUnit,
+    *,
+    expected_commit: str | None = None,
+) -> GrepDependency | None:
+    """Keep a named edit's forwarding implementation at the wrapper's revision."""
+    name = unit.symbol.rsplit("::", 1)[-1]
+    extent_commit = _indexed_commit(row.get("extent_commit") or row.get("indexed_commit"))
+    revision = expected_commit or extent_commit
+    if not (revision and unit.unit_id and unit.body and unit.path.endswith(_PYTHON_PATHS)):
+        return None
+    if unit.granularity != "unit" or not await asyncio.to_thread(_forward_call, unit.body, name):
+        return None
+    edition = {**row, "_extent_commit": extent_commit, "_tier_ids": row.get("tier_ids")}
+    if await symbol_body(repo, org, ns, edition, expected_commit=revision) != unit.body:
+        return None
+    source = {
+        "symbol_id": unit.unit_id,
+        "qualified_name": unit.symbol,
+        "path": unit.path,
+        "start_line": unit.start_line,
+        "end_line": unit.end_line,
+        "body": unit.body,
+        "lines": [unit.start_line],
+        "_tier_ids": row.get("tier_ids") or (),
+    }
+    result = await _forwarded_definition(repo, org, ns, [source], {name}, {unit.path: revision})
+    return result.dependencies[0] if result is not None else None
+
+
 async def _forwarded_definition(
     repo: CodeRepo,
     org: str,
     ns: str,
-    input: CodeGrepInput,
-    scope: SearchScope,
     definitions: list[dict[str, Any]],
     names: set[str],
     revisions: dict[str, str],
+    *,
+    allows_path: Callable[[str], bool] | None = None,
 ) -> RelatedGrepEvidence | None:
     wrappers = await asyncio.to_thread(_forwarders, definitions, names, revisions)
     if not wrappers:
         return None
-    ids = [str(d["symbol_id"]) for d, _, _, _ in wrappers]
+    ids = [
+        str(sid) for d, _, _, _ in wrappers for sid in (d["symbol_id"], *(d.get("_tier_ids") or ()))
+    ]
     edges = await _helper_edges(repo, org, ns, ids)
     delivered = {str(d.get("qualified_name", "")) for d in definitions if d.get("body")}
     candidates = await asyncio.to_thread(_forwarding_edges, wrappers, edges, delivered)
@@ -135,7 +172,11 @@ async def _forwarded_definition(
     available: dict[tuple[str, str], tuple[GrepDependency, dict[str, Any]]] = {}
     for wrapper, edge in candidates:
         sid = edge["to_symbol_id"]
-        if (row := by_id.get(sid)) is not None and _dependency_span(row, edge, input, scope):
+        if (
+            (row := by_id.get(sid)) is not None
+            and _dependency_span(row, edge)
+            and (allows_path is None or allows_path(row["path"]))
+        ):
             available.setdefault((sid, _indexed_commit(edge["indexed_commit"])), (wrapper, row))
     if len(available) != 1:
         return None
@@ -176,9 +217,11 @@ def _forwarding_edges(
         by_caller[edge["from_symbol_id"]].append(edge)
     candidates = []
     for row, wrapper, revision, (line, member) in wrappers:
+        ids = (row["symbol_id"], *(row.get("_tier_ids") or ()))
         exact = [
             e
-            for e in by_caller[row["symbol_id"]]
+            for sid in dict.fromkeys(ids)
+            for e in by_caller[sid]
             if e["line"] == line and e["to_qualified_name"].endswith(f"::{member}")
         ]
         if (bound := _match_helper(exact, wrapper, revision)) and bound[
@@ -365,20 +408,17 @@ async def _load(
     if len(rows) != 1:
         return None
     row = rows[0]
-    if not _dependency_span(row, edge, input, scope):
+    if not (_dependency_span(row, edge) and _allowed(row["path"], input, scope)):
         return None
     source = await _dependency_source(repo, org, ns, row, revision)
     return (row, source) if source is not None else None
 
 
-def _dependency_span(
-    row: dict[str, Any], edge: dict[str, Any], input: CodeGrepInput, scope: SearchScope
-) -> bool:
+def _dependency_span(row: dict[str, Any], edge: dict[str, Any]) -> bool:
     return (
         row["qualified_name"] == edge["to_qualified_name"]
         and row["kind"] in {"function", "method", "property"}
         and 0 < row["start_line"] <= row["end_line"]
-        and _allowed(row["path"], input, scope)
     )
 
 

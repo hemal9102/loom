@@ -8634,6 +8634,11 @@ fn code_symbol() {
     let encoded = serde_json::to_value(value).unwrap();
     assert!(encoded.is_object());
     assert_eq!(
+        encoded["forwarded_definition"],
+        serde_json::from_str::<serde_json::Value>("null").unwrap(),
+        "code.symbol:forwarded_definition"
+    );
+    assert_eq!(
         encoded["lessons_left_out"],
         serde_json::from_str::<serde_json::Value>("0").unwrap(),
         "code.symbol:lessons_left_out"
@@ -8728,6 +8733,11 @@ fn code_edit_context() {
         serde_json::from_str("{\"definitions\":[]}").unwrap();
     let encoded = serde_json::to_value(value).unwrap();
     assert!(encoded.is_object());
+    assert_eq!(
+        encoded["forwarded_definition"],
+        serde_json::from_str::<serde_json::Value>("null").unwrap(),
+        "code.edit_context:forwarded_definition"
+    );
     assert_eq!(
         encoded["lessons_left_out"],
         serde_json::from_str::<serde_json::Value>("0").unwrap(),

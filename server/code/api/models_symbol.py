@@ -30,7 +30,7 @@ from server.code.api.models_common import (
     _ResultLessons,
     _trim_namespaces,
 )
-from server.code.api.models_grep import GrepText
+from server.code.api.models_grep import GrepDependency, GrepText
 from server.code.domain.units import CodeUnit
 from server.operations.base import MCP_HIDDEN
 
@@ -182,11 +182,16 @@ class CodeSymbolOutput(BaseModel):
         )
         if not data.get("lessons_left_out"):
             data.pop("lessons_left_out", None)
+        if not data.get("forwarded_definition"):
+            data.pop("forwarded_definition", None)
         return data
 
     # Up to 10 name matches, or the members matched by file clues, fitted to
     # `token_budget`. Empty when only candidates or presence were found.
     definitions: list[CodeUnit]
+    # code.edit_context may also serve the implementation reached through a
+    # single, verified forwarding call in the requested definition.
+    forwarded_definition: GrepDependency | None = None
     # Whole linked lessons omitted to preserve definitions within an explicit request budget.
     # Absent when none were omitted; the deployment lesson budget is applied separately.
     lessons_left_out: int = 0

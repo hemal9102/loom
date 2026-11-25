@@ -806,8 +806,17 @@ export interface CodeUnit {
   namespace?: string;
 }
 
+export interface GrepDependency {
+  qualified_name: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  body: string;
+}
+
 export interface CodeSymbolOutput {
   definitions: CodeUnit[];
+  forwarded_definition?: GrepDependency | null;
   lessons_left_out?: number;
   ambiguous?: boolean;
   hierarchy?: Record<string, Array<Record<string, unknown>>>;
@@ -990,14 +999,6 @@ export interface RelatedGrepEvidence {
   definitions_note?: string;
   truncated?: boolean;
   dependencies?: GrepDependency[];
-}
-
-export interface GrepDependency {
-  qualified_name: string;
-  path: string;
-  start_line: number;
-  end_line: number;
-  body: string;
 }
 
 export interface CodeGrepOutput {

@@ -10,6 +10,7 @@ import time
 from collections.abc import Awaitable
 from typing import Any
 
+from server.code.api.models_grep import GrepDependency
 from server.code.api.models_symbol import (
     EDIT_TEST_CONTEXT_LINES,
     CodeEditContextInput,
@@ -51,6 +52,7 @@ from server.code.app.symbol.resolve import (
     symbol_body,
 )
 from server.code.app.symbol.uses import _mention_leg, _symbol_uses
+from server.code.domain.units import CodeUnit, estimate_json_tokens
 from server.code.store.index import CodeRepo
 from server.core.errors import ValidationError
 from server.identity.app.request_scope import request_narrowed
@@ -624,6 +626,29 @@ async def _rank_symbol_rows(
         )
 
 
+async def _edit_forwarding_context(
+    repo: CodeRepo,
+    org: str,
+    ns: str,
+    heads: list[dict[str, Any]],
+    units: list[CodeUnit],
+    expected_commit: str | None,
+) -> tuple[GrepDependency | None, int]:
+    if len(heads) != 1 or len(units) != 1:
+        return None, 0
+    from server.code.app.enrich import bounded
+    from server.code.app.grep_dependencies import edit_forwarded_definition
+
+    with code_span("symbol.forwarded_definition"):
+        source = await bounded(
+            edit_forwarded_definition(
+                repo, org, ns, heads[0], units[0], expected_commit=expected_commit
+            ),
+            None,
+        )
+    return source, estimate_json_tokens(source.model_dump(mode="json")) if source else 0
+
+
 async def handle_code_symbol(
     input: CodeSymbolInput,
     *,
@@ -727,7 +752,7 @@ async def handle_code_symbol(
         legs.cancel()
         raise
 
-    from server.code.domain.units import estimate_json_tokens, remaining_token_budget
+    from server.code.domain.units import remaining_token_budget
 
     # the compact block is budgeted before the bodies are trimmed
     uses_tokens = estimate_json_tokens(brief) if brief else 0
@@ -757,6 +782,14 @@ async def handle_code_symbol(
     )
     if matched_members:
         route = "edit_context_members"
+    forwarded = None
+    if op_name == "code.edit_context":
+        forwarded, forwarded_tokens = await _edit_forwarding_context(
+            repo, org, ns, head, budgeted, expected_commit
+        )
+        if forwarded is not None:
+            route += "+forwarded_definition"
+            tokens += forwarded_tokens
     # The shape this call served prices its budget and is written on the trace row, so the
     # ranked lookup's own p99 is measurable.
 
@@ -801,6 +834,7 @@ async def handle_code_symbol(
     )
     return CodeSymbolOutput(
         definitions=budgeted,
+        forwarded_definition=forwarded,
         lessons_left_out=lessons_left_out,
         ambiguous=ambiguous,
         candidates=[],

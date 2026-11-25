@@ -8,6 +8,7 @@ from server.code.api.models_grep import CodeGrepInput, GrepDependency, RelatedGr
 from server.code.app import grep, grep_dependencies
 from server.code.app.grep_dependencies import _allowed, _one_helper
 from server.code.domain.search_scope import build_scope
+from server.code.domain.units import CodeUnit
 
 
 def test_related_definition_uses_grep_glob_semantics_for_newline_paths() -> None:
@@ -15,6 +16,36 @@ def test_related_definition_uses_grep_glob_semantics_for_newline_paths() -> None
     args = CodeGrepInput(pattern="call(obj.attr)")
     assert _allowed(path, args, build_scope(path_globs=["pkg/**"]))
     assert not _allowed(path, args, build_scope(exclude_globs=["pkg/**"]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected_commit", [None, "b" * 40])
+async def test_edit_forwarder_requires_the_served_body_at_the_edge_revision(
+    monkeypatch, expected_commit
+) -> None:
+    revision = "a" * 40
+    unit = CodeUnit(
+        unit_id="wrapper",
+        path="src/module.py",
+        start_line=1,
+        end_line=2,
+        symbol="src.module::run",
+        body="def run():\n    return new_target()",
+    )
+
+    async def previous_body(repo, org, ns, source, **kwargs):
+        assert source["_extent_commit"] == revision
+        assert kwargs["expected_commit"] == (expected_commit or revision)
+        return "def run():\n    return old_target()"
+
+    monkeypatch.setattr(grep_dependencies, "symbol_body", previous_body)
+    repo: Any = object()
+    assert (
+        await grep_dependencies.edit_forwarded_definition(
+            repo, "o", "n", {"indexed_commit": revision}, unit, expected_commit=expected_commit
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

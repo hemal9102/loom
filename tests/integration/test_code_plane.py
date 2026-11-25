@@ -556,6 +556,58 @@ async def test_edit_context_prefers_distinct_test_source_windows(
     assert "DB::doWork();\n    DB::doWork();" in definition.examples[0]["context"]["text"]
 
 
+@pytest.mark.parametrize("same_revision", [True, False])
+async def test_edit_context_reads_verified_forwarded_implementation(
+    code_env, monkeypatch, same_revision
+) -> None:
+    from server.code.api.models_symbol import CodeEditContextInput, CodeSymbolInput
+    from server.code.app.symbol import handle_code_edit_context, handle_code_symbol
+    from server.embedding.fake import fake_model_name
+    from server.settings import settings
+
+    repo, org, ns = code_env
+    monkeypatch.setattr(settings, "code_intel_enabled", True)
+    monkeypatch.setattr(settings, "embedding_model", fake_model_name(settings.embedding_dim))
+    await _ingest(
+        repo,
+        org,
+        ns,
+        source=b"def compute():\n    return 7\n",
+        path="src/calculation.py",
+        sha=("a" if same_revision else "b") * 40,
+    )
+    await _ingest(
+        repo,
+        org,
+        ns,
+        source=b"from src.calculation import compute\n\ndef run():\n    return compute()\n",
+        path="src/action.py",
+    )
+    await _ingest(
+        repo,
+        org,
+        ns,
+        source=b"from src.action import run\n\ndef test_run():\n    assert run() == 7\n",
+        path="tests/test_action.py",
+    )
+    args = {"org": org, "namespace": ns, "name": "src/action.py:run", "include_lessons": False}
+    plain = await handle_code_symbol(CodeSymbolInput(**args))
+    result = await handle_code_edit_context(CodeEditContextInput(**args))
+    (wrapper,) = result.definitions
+    assert wrapper.body == plain.definitions[0].body
+    assert "forwarded_definition" not in plain.model_dump()
+    assert result.ambiguous is False
+    (example,) = wrapper.examples
+    assert example["path"] == "tests/test_action.py"
+    assert "assert run() == 7" in example["context"]["text"]
+    if same_revision:
+        assert result.forwarded_definition is not None
+        assert result.forwarded_definition.qualified_name == "src.calculation::compute"
+        assert result.forwarded_definition.body.strip() == "def compute():\n    return 7"
+    else:
+        assert "forwarded_definition" not in result.model_dump()
+
+
 @pytest.mark.parametrize(
     "case",
     [
