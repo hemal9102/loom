@@ -556,7 +556,9 @@ async def test_edit_context_prefers_distinct_test_source_windows(
     assert "DB::doWork();\n    DB::doWork();" in definition.examples[0]["context"]["text"]
 
 
-@pytest.mark.parametrize("case", ["direct", "different_revision", "alias", "signature_call"])
+@pytest.mark.parametrize(
+    "case", ["direct", "different_revision", "alias", "shadowed_alias", "signature_call"]
+)
 async def test_edit_context_reads_verified_forwarded_implementation(
     code_env, monkeypatch, case
 ) -> None:
@@ -577,10 +579,11 @@ async def test_edit_context_reads_verified_forwarded_implementation(
         sha=("b" if case == "different_revision" else "a") * 40,
     )
     wrapper_source = b"from src.calculation import compute\n\ndef run():\n    return compute()\n"
-    if case == "alias":
+    if case in {"alias", "shadowed_alias"}:
         wrapper_source = (
             b"from src.calculation import compute, compute as execute\n\n"
-            b"def run():\n    return execute()\n\ndef other():\n    return compute()\n"
+            + (b"execute = lambda: 99\n\n" if case == "shadowed_alias" else b"")
+            + b"def run():\n    return execute()\n\ndef other():\n    return compute()\n"
         )
     if case == "signature_call":
         wrapper_source = (
@@ -611,7 +614,7 @@ async def test_edit_context_reads_verified_forwarded_implementation(
     (example,) = wrapper.examples
     assert example["path"] == "tests/test_action.py"
     assert "assert run() == 7" in example["context"]["text"]
-    if case in {"direct", "alias"}:
+    if case == "direct":
         assert result.forwarded_definition is not None
         assert result.forwarded_definition.qualified_name == "src.calculation::compute"
         assert result.forwarded_definition.body.strip() == "def compute():\n    return 7"

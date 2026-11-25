@@ -222,20 +222,11 @@ def _forwarding_edges(
             e
             for sid in dict.fromkeys(ids)
             for e in by_caller[sid]
-            if e["line"] == line
-            and e["path"] == wrapper.path
-            and e["from_qualified_name"] == wrapper.qualified_name
-            and e["to_qualified_name"] != wrapper.qualified_name
-            and _indexed_commit(e["indexed_commit"]) == revision
+            if e["line"] == line and e["to_qualified_name"].endswith(f"::{member}")
         ]
-        named = [e for e in exact if e["to_qualified_name"].endswith(f"::{member}")]
-        # Python parser call edges identify the single invocation on this line,
-        # including aliases. Compiler references can also point to its arguments.
-        parsed = [e for e in exact if e["tier"] == "treesitter" and e.get("confidence", 0) == 1]
-        bound = _match_helper(named, wrapper, revision) if named else _one_target(parsed)
-        if not bound or bound["to_qualified_name"] in delivered:
-            continue
-        if all(e["to_qualified_name"] == bound["to_qualified_name"] for e in parsed):
+        if (bound := _match_helper(exact, wrapper, revision)) and bound[
+            "to_qualified_name"
+        ] not in delivered:
             candidates.append((wrapper, bound))
     return candidates
 

@@ -1444,7 +1444,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "code.edit_context": (
         "Read implementation, indexed tests, and linked notes before editing. "
-        "A single verified forwarding call includes its implementation at the same revision. "
+        "A single forwarding call whose name matches its indexed target includes that "
+        "implementation at the same revision. "
         "Give a definition name, path:symbol, or path:line. "
         "Use literal clues to find the edit target, with the file path if known."
     ),
