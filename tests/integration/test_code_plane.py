@@ -557,12 +557,14 @@ async def test_edit_context_prefers_distinct_test_source_windows(
 
 
 @pytest.mark.parametrize(
-    "case", ["direct", "different_revision", "alias", "shadowed_alias", "signature_call"]
+    "case",
+    ["direct", "different_revision", "alias", "shadowed_alias", "rebound", "signature_call"],
 )
 async def test_edit_context_reads_verified_forwarded_implementation(
     code_env, monkeypatch, case
 ) -> None:
     from server.code.api.models_symbol import CodeEditContextInput, CodeSymbolInput
+    from server.code.app.index import gitrepo, mirrors
     from server.code.app.symbol import handle_code_edit_context, handle_code_symbol
     from server.embedding.fake import fake_model_name
     from server.settings import settings
@@ -590,6 +592,19 @@ async def test_edit_context_reads_verified_forwarded_implementation(
             b"from src.calculation import compute\n\n"
             b"def run(instance, value=compute()): return instance.compute()\n"
         )
+    if case == "rebound":
+        wrapper_source = wrapper_source.replace(
+            b"\n\ndef run()", b"\ncompute = lambda: 99\n\ndef run()"
+        )
+
+    async def mirror(_config):
+        return "private-fixture"
+
+    async def show_file(_directory, _revision, path, *, max_bytes):
+        return wrapper_source if path == "src/action.py" else None
+
+    monkeypatch.setattr(mirrors, "present_dir", mirror)
+    monkeypatch.setattr(gitrepo, "show_file", show_file)
     await _ingest(
         repo,
         org,

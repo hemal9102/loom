@@ -11,7 +11,7 @@ import textwrap
 import tokenize
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 from server.code.api.models_grep import CodeGrepInput, GrepDependency, RelatedGrepEvidence
 from server.code.app.grep_source import GREP_MATCH_TEXT_CHARS, match_revisions
@@ -30,6 +30,12 @@ _DECLARATION = re.compile(r"(?:async[ \t]+)?def[ \t]+([^\W\d]\w*)(?=[ \t]*(?:\(|
 
 
 _Forwarder = tuple[dict[str, Any], GrepDependency, str, tuple[int, str]]
+
+
+class _ForwardingCall(NamedTuple):
+    line: int
+    spelling: str
+    bare: bool
 
 
 async def add_dependencies(
@@ -126,12 +132,23 @@ async def edit_forwarded_definition(
     name = unit.symbol.rsplit("::", 1)[-1]
     extent_commit = _indexed_commit(row.get("extent_commit") or row.get("indexed_commit"))
     revision = expected_commit or extent_commit
-    if not (revision and unit.unit_id and unit.body and unit.path.endswith(_PYTHON_PATHS)):
+    if not (
+        revision
+        and unit.unit_id
+        and unit.body
+        and unit.path.endswith(_PYTHON_PATHS)
+        and unit.granularity == "unit"
+    ):
         return None
-    if unit.granularity != "unit" or not await asyncio.to_thread(_forward_call, unit.body, name):
+    call = await asyncio.to_thread(_forward_call, unit.body, name)
+    if call is None:
         return None
     edition = {**row, "_extent_commit": extent_commit, "_tier_ids": row.get("tier_ids")}
     if await symbol_body(repo, org, ns, edition, expected_commit=revision) != unit.body:
+        return None
+    if call.bare and not await _verified_global_binding(
+        repo, org, ns, unit.path, revision, call.spelling
+    ):
         return None
     source = {
         "symbol_id": unit.unit_id,
@@ -145,6 +162,68 @@ async def edit_forwarded_definition(
     }
     result = await _forwarded_definition(repo, org, ns, [source], {name}, {unit.path: revision})
     return result.dependencies[0] if result is not None else None
+
+
+async def _verified_global_binding(
+    repo: CodeRepo, org: str, ns: str, path: str, revision: str, name: str
+) -> bool:
+    from server.code.app.index.mirrors import present_dir
+    from server.code.app.read import _verified_blob
+    from server.code.domain.index.repos import repo_for_namespace
+
+    files, directory = await asyncio.gather(
+        repo.file_rows_for_paths(org, ns, [path]),
+        present_dir(repo_for_namespace(org, ns)),
+    )
+    file = files.get(path)
+    if not directory or not file or file["indexed_commit"] != revision or not file["blob_sha"]:
+        return False
+    source = await _verified_blob(directory, path, revision, file["blob_sha"])
+    return source is not None and await asyncio.to_thread(_one_global_binding, source, name)
+
+
+def _declares_bare_name(node: ast.AST, name: str) -> bool:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return node.name == name
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return any((item.asname or item.name.split(".", 1)[0]) == name for item in node.names)
+    return False
+
+
+def _one_global_binding(source: bytes, name: str) -> bool:
+    """A bare call needs one unconditional module binding that source does not shadow."""
+    try:
+        module = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return False
+    declarations = [node for node in module.body if _declares_bare_name(node, name)]
+    if len(declarations) != 1:
+        return False
+    anchor = declarations[0]
+    if isinstance(anchor, (ast.ClassDef, ast.Import)):
+        return False
+    if isinstance(anchor, ast.ImportFrom) and (
+        sum((item.asname or item.name) == name for item in anchor.names) != 1
+    ):
+        return False
+    for node in ast.walk(module):
+        if node is not anchor and _declares_bare_name(node, name):
+            return False
+        if (
+            isinstance(node, ast.Name)
+            and node.id == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            return False
+        if isinstance(node, ast.arg) and node.arg == name:
+            return False
+        if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name == name:
+            return False
+        if isinstance(node, ast.MatchMapping) and node.rest == name:
+            return False
+        if isinstance(node, ast.ImportFrom) and any(item.name == "*" for item in node.names):
+            return False
+    return True
 
 
 async def _forwarded_definition(
@@ -260,13 +339,13 @@ def _forwarders(
                     body=body,
                 ),
                 revision,
-                (start + call[0] - 1, call[1]),
+                (start + call.line - 1, call.spelling),
             )
         )
     return out
 
 
-def _forward_call(body: str, name: str) -> tuple[int, str] | None:
+def _forward_call(body: str, name: str) -> _ForwardingCall | None:
     try:
         [function] = ast.parse(textwrap.dedent(body)).body
     except (SyntaxError, ValueError):
@@ -297,9 +376,9 @@ def _forward_call(body: str, name: str) -> tuple[int, str] | None:
             isinstance(node, ast.arg) and node.arg == spelling for node in ast.walk(function.args)
         ):
             return None
-        return value.lineno, spelling
+        return _ForwardingCall(value.lineno, spelling, True)
     if isinstance(value.func, ast.Attribute):
-        return value.lineno, value.func.attr
+        return _ForwardingCall(value.lineno, value.func.attr, False)
     return None
 
 
