@@ -222,11 +222,20 @@ def _forwarding_edges(
             e
             for sid in dict.fromkeys(ids)
             for e in by_caller[sid]
-            if e["line"] == line and e["to_qualified_name"].endswith(f"::{member}")
+            if e["line"] == line
+            and e["path"] == wrapper.path
+            and e["from_qualified_name"] == wrapper.qualified_name
+            and e["to_qualified_name"] != wrapper.qualified_name
+            and _indexed_commit(e["indexed_commit"]) == revision
         ]
-        if (bound := _match_helper(exact, wrapper, revision)) and bound[
-            "to_qualified_name"
-        ] not in delivered:
+        named = [e for e in exact if e["to_qualified_name"].endswith(f"::{member}")]
+        # Python parser call edges identify the single invocation on this line,
+        # including aliases. Compiler references can also point to its arguments.
+        parsed = [e for e in exact if e["tier"] == "treesitter" and e.get("confidence", 0) == 1]
+        bound = _match_helper(named, wrapper, revision) if named else _one_target(parsed)
+        if not bound or bound["to_qualified_name"] in delivered:
+            continue
+        if all(e["to_qualified_name"] == bound["to_qualified_name"] for e in parsed):
             candidates.append((wrapper, bound))
     return candidates
 
@@ -286,8 +295,18 @@ def _forward_call(body: str, name: str) -> tuple[int, str] | None:
         or sum(isinstance(node, ast.Call) for node in ast.walk(value)) != 1
     ):
         return None
+    calls_on_line = sum(
+        isinstance(node, ast.Call) and node.lineno == value.lineno for node in ast.walk(function)
+    )
+    if calls_on_line != 1:
+        return None
     if isinstance(value.func, ast.Name):
-        return value.lineno, value.func.id
+        spelling = value.func.id
+        if any(
+            isinstance(node, ast.arg) and node.arg == spelling for node in ast.walk(function.args)
+        ):
+            return None
+        return value.lineno, spelling
     if isinstance(value.func, ast.Attribute):
         return value.lineno, value.func.attr
     return None

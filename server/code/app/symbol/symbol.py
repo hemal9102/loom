@@ -649,6 +649,18 @@ async def _edit_forwarding_context(
     return source, estimate_json_tokens(source.model_dump(mode="json")) if source else 0
 
 
+def _symbol_route(*, uses: bool, brief: bool, members: bool, forwarded: bool) -> str:
+    if members:
+        route = "edit_context_members"
+    elif uses:
+        route = "symbol_exact+uses"
+    elif brief:
+        route = "symbol_exact+uses_brief"
+    else:
+        route = "symbol_exact"
+    return route + "+forwarded_definition" if forwarded else route
+
+
 async def handle_code_symbol(
     input: CodeSymbolInput,
     *,
@@ -775,21 +787,18 @@ async def handle_code_symbol(
         tokens += estimate_json_tokens(uses)
     elif brief:
         uses = brief
-    route = (
-        "symbol_exact+uses"
-        if input.uses
-        else ("symbol_exact+uses_brief" if brief else "symbol_exact")
-    )
-    if matched_members:
-        route = "edit_context_members"
     forwarded = None
     if op_name == "code.edit_context":
         forwarded, forwarded_tokens = await _edit_forwarding_context(
             repo, org, ns, head, budgeted, expected_commit
         )
-        if forwarded is not None:
-            route += "+forwarded_definition"
-            tokens += forwarded_tokens
+        tokens += forwarded_tokens
+    route = _symbol_route(
+        uses=bool(input.uses),
+        brief=bool(brief),
+        members=matched_members,
+        forwarded=forwarded is not None,
+    )
     # The shape this call served prices its budget and is written on the trace row, so the
     # ranked lookup's own p99 is measurable.
 

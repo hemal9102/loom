@@ -556,9 +556,9 @@ async def test_edit_context_prefers_distinct_test_source_windows(
     assert "DB::doWork();\n    DB::doWork();" in definition.examples[0]["context"]["text"]
 
 
-@pytest.mark.parametrize("same_revision", [True, False])
+@pytest.mark.parametrize("case", ["direct", "different_revision", "alias", "signature_call"])
 async def test_edit_context_reads_verified_forwarded_implementation(
-    code_env, monkeypatch, same_revision
+    code_env, monkeypatch, case
 ) -> None:
     from server.code.api.models_symbol import CodeEditContextInput, CodeSymbolInput
     from server.code.app.symbol import handle_code_edit_context, handle_code_symbol
@@ -574,13 +574,24 @@ async def test_edit_context_reads_verified_forwarded_implementation(
         ns,
         source=b"def compute():\n    return 7\n",
         path="src/calculation.py",
-        sha=("a" if same_revision else "b") * 40,
+        sha=("b" if case == "different_revision" else "a") * 40,
     )
+    wrapper_source = b"from src.calculation import compute\n\ndef run():\n    return compute()\n"
+    if case == "alias":
+        wrapper_source = (
+            b"from src.calculation import compute, compute as execute\n\n"
+            b"def run():\n    return execute()\n\ndef other():\n    return compute()\n"
+        )
+    if case == "signature_call":
+        wrapper_source = (
+            b"from src.calculation import compute\n\n"
+            b"def run(instance, value=compute()): return instance.compute()\n"
+        )
     await _ingest(
         repo,
         org,
         ns,
-        source=b"from src.calculation import compute\n\ndef run():\n    return compute()\n",
+        source=wrapper_source,
         path="src/action.py",
     )
     await _ingest(
@@ -600,7 +611,7 @@ async def test_edit_context_reads_verified_forwarded_implementation(
     (example,) = wrapper.examples
     assert example["path"] == "tests/test_action.py"
     assert "assert run() == 7" in example["context"]["text"]
-    if same_revision:
+    if case in {"direct", "alias"}:
         assert result.forwarded_definition is not None
         assert result.forwarded_definition.qualified_name == "src.calculation::compute"
         assert result.forwarded_definition.body.strip() == "def compute():\n    return 7"
